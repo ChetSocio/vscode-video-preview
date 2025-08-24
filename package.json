@@ -1,0 +1,70 @@
+{
+  "name": "vscode-video-preview",
+  "displayName": "Video Preview (Player) - BNPL",
+  "description": "Play and view video files (.mp4, .webm, .mov, .mkv, .avi) inside VS Code using a custom editor.",
+  "version": "0.0.1",
+  "publisher": "BatchNepal",
+  "engines": {
+    "vscode": "^1.90.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "activationEvents": [
+    "onCommand:videoPreview.open",
+    "onFileSystem:**/*.mp4",
+    "onFileSystem:**/*.webm",
+    "onFileSystem:**/*.mov",
+    "onFileSystem:**/*.mkv",
+    "onFileSystem:**/*.avi",
+    "onFileSystem:**/*.m4v"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "videoPreview.open",
+        "title": "Open with Video Preview"
+      }
+    ],
+    "customEditors": [
+      {
+        "viewType": "videoPreview.viewer",
+        "displayName": "Video Preview",
+        "selector": [
+          {
+            "filenamePattern": "**/*.mp4"
+          },
+          {
+            "filenamePattern": "**/*.webm"
+          },
+          {
+            "filenamePattern": "**/*.mov"
+          },
+          {
+            "filenamePattern": "**/*.mkv"
+          },
+          {
+            "filenamePattern": "**/*.avi"
+          },
+          {
+            "filenamePattern": "**/*.m4v"
+          }
+        ],
+        "priority": "default",
+        "readonly": true
+      }
+    ]
+  },
+  "scripts": {
+    "compile": "tsc -p ./",
+    "watch": "tsc -w",
+    "lint": "echo 'add eslint if you like'",
+    "package": "vsce package"
+  },
+  "devDependencies": {
+    "@types/node": "^18.19.0",
+    "@types/vscode": "^1.90.0",
+    "typescript": "^5.4.0"
+  }
+}
