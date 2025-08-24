@@ -2,7 +2,7 @@
   "name": "vscode-video-preview",
   "displayName": "Video Preview (Player) - BNPL",
   "description": "Play and view video files (.mp4, .webm, .mov, .mkv, .avi) inside VS Code using a custom editor.",
-  "version": "0.0.1",
+  "version": "0.0.2",
   "publisher": "BatchNepal",
   "author": {
     "name": "BatchNepal Consultancy Pvt. Ltd.",
