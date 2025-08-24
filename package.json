@@ -6,7 +6,7 @@
   "publisher": "BatchNepal",
   "repository": {
     "type": "git",
-    "url": "https://github.com/BatchNepal/vscode-video-preview.git"
+    "url": "https://github.com/ChetSocio/vscode-video-preview"
   },
   "engines": {
     "vscode": "^1.90.0"
