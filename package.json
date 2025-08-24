@@ -4,6 +4,10 @@
   "description": "Play and view video files (.mp4, .webm, .mov, .mkv, .avi) inside VS Code using a custom editor.",
   "version": "0.0.1",
   "publisher": "BatchNepal",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/BatchNepal/vscode-video-preview.git"
+  },
   "engines": {
     "vscode": "^1.90.0"
   },
