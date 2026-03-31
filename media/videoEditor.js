@@ -1,38 +1,86 @@
 (function () {
+  "use strict";
+
   const vscode = acquireVsCodeApi();
+  const wrapper = document.getElementById("videoWrapper");
+  const video = document.getElementById("player");
+  const playOverlay = document.getElementById("playPauseOverlay");
+  const progressWrap = document.getElementById("progressWrap");
+  const progressBg = document.getElementById("progressBg");
+  const progressFill = document.getElementById("progressFill");
+  const progressThumb = document.getElementById("progressThumb");
+  const timeTooltip = document.getElementById("timeTooltip");
+  const timeDisplay = document.getElementById("timeDisplay");
+  const resBadge = document.getElementById("resBadge");
+  const playBtn = document.getElementById("playBtn");
+  const muteBtn = document.getElementById("muteBtn");
+  const volumeSlider = document.getElementById("volumeSlider");
+  const pipBtn = document.getElementById("pipBtn");
+  const fsBtn = document.getElementById("fsBtn");
+  const openExternalBtn = document.getElementById("openExternal");
+  const copyPathBtn = document.getElementById("copyPath");
+  const ctxMenu = document.getElementById("contextMenu");
+  const backBtn = document.getElementById("backBtn");
+  const fwdBtn = document.getElementById("fwdBtn");
+  const speedBtn = document.getElementById("speedBtn");
 
-  const videoWrapper = document.querySelector(".video-wrapper");
-  const video = document.querySelector("#player");
-  const meta =
-    document.querySelector("#meta") || document.querySelector(".meta");
+  vscode.postMessage({ type: "ready" });
 
-  // Ensure overlay & UI mounts exist (create if missing in HTML)
-  let playOverlay = document.getElementById("playPauseOverlay");
-  if (!playOverlay) {
-    playOverlay = document.createElement("div");
-    playOverlay.id = "playPauseOverlay";
-    playOverlay.className = "play-overlay";
-    videoWrapper.appendChild(playOverlay);
-  }
+  const SPEEDS = [0.5, 0.75, 1, 1.25, 1.5, 2];
+  let speedIdx = 2; // default 1x
 
-  // Context menu (single instance)
-  let ctxMenu = document.getElementById("contextMenu");
-  if (!ctxMenu) {
-    ctxMenu = document.createElement("div");
-    ctxMenu.id = "contextMenu";
-    ctxMenu.className = "context-menu";
-    document.body.appendChild(ctxMenu);
-  }
+  let audioEl = null;
+  let videoLoaded = false; // guard — outside handler so it persists across messages
 
-  // --- State ---
-  let isMuted = !!video.muted;
+  video.volume = 1.0;
+  video.muted = true;
+  volumeSlider.value = "1";
+
+  let isDragging = false;
   let boosting = false;
   let boostTimer = null;
-  let pressStart = 0;
 
-  // --- Meta info (Duration • Resolution) ---
-  function humanTime(s) {
-    if (!isFinite(s)) return "—";
+  backBtn.addEventListener("click", (e) => {
+    e.stopPropagation();
+    const t = Math.max(0, video.currentTime - 10);
+    video.currentTime = t;
+    if (audioEl) audioEl.currentTime = t;
+  });
+
+  fwdBtn.addEventListener("click", (e) => {
+    e.stopPropagation();
+    const t = Math.min(video.duration || Infinity, video.currentTime + 10);
+    video.currentTime = t;
+    if (audioEl) audioEl.currentTime = t;
+  });
+
+  speedBtn.addEventListener("click", (e) => {
+    e.stopPropagation();
+    speedIdx = (speedIdx + 1) % SPEEDS.length;
+    const speed = SPEEDS[speedIdx];
+    video.playbackRate = speed;
+    if (audioEl) audioEl.playbackRate = speed;
+    speedBtn.textContent = speed === 1 ? "1×" : `${speed}×`;
+  });
+  // ── Metadata ────────────────────────────────────────────
+  video.addEventListener("loadedmetadata", () => {
+    updateTime();
+    const h = video.videoHeight;
+    if (h)
+      resBadge.textContent =
+        h >= 2160 ? "4K" : h >= 1080 ? "HD" : h >= 720 ? "720p" : `${h}p`;
+  });
+
+  video.addEventListener("error", () => {
+    vscode.postMessage({
+      type: "error",
+      message: "Failed to load video or unsupported codec.",
+    });
+  });
+
+  // ── Time ────────────────────────────────────────────────
+  function fmt(s) {
+    if (!isFinite(s) || isNaN(s)) return "0:00";
     const h = Math.floor(s / 3600);
     const m = Math.floor((s % 3600) / 60)
       .toString()
@@ -42,58 +90,95 @@
       .padStart(2, "0");
     return h > 0 ? `${h}:${m}:${sec}` : `${m}:${sec}`;
   }
-  function updateMeta() {
-    const duration = humanTime(video.duration || 0);
-    const w = video.videoWidth || "—";
-    const h = video.videoHeight || "—";
-    if (meta)
-      meta.textContent = `Duration: ${duration} • Resolution: ${w}×${h}`;
+
+  function updateTime() {
+    timeDisplay.textContent = `${fmt(video.currentTime)} / ${fmt(video.duration)}`;
   }
-  video.addEventListener("loadedmetadata", updateMeta);
-  video.addEventListener("error", () => {
-    vscode.postMessage({
-      type: "error",
-      message: "Failed to load video or unsupported codec.",
-    });
+
+  // ── Progress ─────────────────────────────────────────────
+  video.addEventListener("timeupdate", () => {
+    if (isDragging) return;
+    const pct = video.duration ? (video.currentTime / video.duration) * 100 : 0;
+    progressFill.style.width = `${pct}%`;
+    progressThumb.style.left = `${pct}%`;
+    updateTime();
   });
 
-  // --- Play/Pause ---
-  function togglePlayPause() {
+  function seekTo(e) {
+    const rect = progressBg.getBoundingClientRect();
+    const pct = Math.min(1, Math.max(0, (e.clientX - rect.left) / rect.width));
+    const t = pct * (video.duration || 0);
+    video.currentTime = t;
+    if (audioEl) audioEl.currentTime = t;
+    progressFill.style.width = `${pct * 100}%`;
+    progressThumb.style.left = `${pct * 100}%`;
+    updateTime();
+  }
+
+  progressWrap.addEventListener("mousemove", (e) => {
+    const rect = progressBg.getBoundingClientRect();
+    const pct = Math.min(1, Math.max(0, (e.clientX - rect.left) / rect.width));
+    timeTooltip.textContent = fmt(pct * (video.duration || 0));
+    const tipX = Math.min(Math.max(e.clientX - rect.left, 20), rect.width - 20);
+    timeTooltip.style.left = `${tipX}px`;
+  });
+
+  progressWrap.addEventListener("mousedown", (e) => {
+    isDragging = true;
+    seekTo(e);
+    const mv = (ev) => seekTo(ev);
+    const up = () => {
+      isDragging = false;
+      document.removeEventListener("mousemove", mv);
+      document.removeEventListener("mouseup", up);
+    };
+    document.addEventListener("mousemove", mv);
+    document.addEventListener("mouseup", up);
+  });
+
+  // ── Play / Pause ─────────────────────────────────────────
+  function togglePlay() {
     if (video.paused) {
-      video.play();
-      showOverlay("play");
+      video.play().catch(() => {});
+      if (audioEl) {
+        audioEl.currentTime = video.currentTime;
+        audioEl.play().catch(() => {});
+      }
+      flash("play");
     } else {
       video.pause();
-      showOverlay("pause");
-    }
-    // update play button icon
-    const playBtn = controls.querySelector('[data-key="play"]');
-    if (playBtn) {
-      playBtn.innerHTML = video.paused ? playIconSVG() : pauseIconSVG();
+      if (audioEl) audioEl.pause();
+      flash("pause");
     }
   }
 
-  function showOverlay(mode) {
-    playOverlay.innerHTML =
-      mode === "play" ? playOverlaySVG() : pauseOverlaySVG();
+  function flash(mode) {
+    playOverlay.innerHTML = mode === "play" ? svgFlashPlay() : svgFlashPause();
     playOverlay.classList.add("show");
-    setTimeout(() => playOverlay.classList.remove("show"), 700);
+    setTimeout(() => playOverlay.classList.remove("show"), 550);
   }
 
-  // click toggles play/pause
-  video.addEventListener("click", togglePlayPause);
-  // double click fullscreen
-  video.addEventListener("dblclick", toggleFullscreen);
+  function updatePlayBtn() {
+    playBtn.innerHTML = video.paused ? svgPlayBtn() : svgPauseBtn();
+  }
 
-  // --- Press & hold to boost (2s -> 2x while held) ---
+  video.addEventListener("click", togglePlay);
+  video.addEventListener("dblclick", () => {});
+  playBtn.addEventListener("click", (e) => {
+    e.stopPropagation();
+    togglePlay();
+  });
+  video.addEventListener("play", updatePlayBtn);
+  video.addEventListener("pause", updatePlayBtn);
+  updatePlayBtn();
+
+  // ── Speed boost on hold ──────────────────────────────────
   video.addEventListener("pointerdown", () => {
-    pressStart = performance.now();
     boostTimer = setTimeout(() => {
       if (!video.paused) {
         boosting = true;
         video.playbackRate = 2.0;
-        // subtle feedback via overlay (play icon with tiny ring)
-        showOverlay("play");
+        if (audioEl) audioEl.playbackRate = 2.0;
       }
     }, 1200);
   });
@@ -102,29 +187,64 @@
     if (boosting) {
       boosting = false;
       video.playbackRate = 1.0;
+      if (audioEl) audioEl.playbackRate = 1.0;
     }
   };
-  video.addEventListener("pointerup", endHold);
-  video.addEventListener("pointerleave", endHold);
-  video.addEventListener("pointercancel", endHold);
+  ["pointerup", "pointerleave", "pointercancel"].forEach((ev) =>
+    video.addEventListener(ev, endHold),
+  );
 
-  // --- Mute ---
-  function toggleMute() {
-    video.muted = !video.muted;
-    isMuted = video.muted;
-    const muteBtn = controls.querySelector('[data-key="mute"]');
-    if (muteBtn)
-      muteBtn.innerHTML = isMuted ? mutedIconSVG() : volumeIconSVG(false);
+  // ── Mute / Volume ────────────────────────────────────────
+  function getActiveAudio() {
+    return audioEl || video;
   }
 
-  // --- Picture-in-Picture ---
+  function toggleMute() {
+    const active = getActiveAudio();
+    active.muted = !active.muted;
+    if (audioEl) video.muted = true;
+    if (!active.muted && active.volume === 0) {
+      active.volume = 1.0;
+      volumeSlider.value = "1";
+    }
+    updateMuteBtn();
+  }
+
+  function updateMuteBtn() {
+    const active = getActiveAudio();
+    muteBtn.innerHTML =
+      active.muted || active.volume === 0 ? svgMuted() : svgVolume();
+  }
+
+  muteBtn.addEventListener("click", (e) => {
+    e.stopPropagation();
+    toggleMute();
+  });
+
+  volumeSlider.addEventListener("input", () => {
+    const v = parseFloat(volumeSlider.value);
+    const active = getActiveAudio();
+    active.volume = v;
+    active.muted = v === 0;
+    updateMuteBtn();
+  });
+
+  video.addEventListener("volumechange", () => {
+    if (audioEl) return;
+    if (!isDragging)
+      volumeSlider.value = video.muted ? "0" : String(video.volume);
+    updateMuteBtn();
+  });
+
+  updateMuteBtn();
+
+  // ── PiP ─────────────────────────────────────────────────
   async function togglePiP() {
     try {
-      if (document.pictureInPictureElement) {
+      if (document.pictureInPictureElement)
         await document.exitPictureInPicture();
-      } else if (document.pictureInPictureEnabled) {
+      else if (document.pictureInPictureEnabled)
         await video.requestPictureInPicture();
-      }
     } catch (e) {
       vscode.postMessage({
         type: "error",
@@ -133,58 +253,108 @@
     }
   }
 
-  // --- Fullscreen (wrapper for best results) ---
-  function inFullscreen() {
-    return !!document.fullscreenElement;
-  }
+  pipBtn.innerHTML = svgPiP();
+  if (!document.pictureInPictureEnabled) pipBtn.style.display = "none";
+  pipBtn.addEventListener("click", (e) => {
+    e.stopPropagation();
+    togglePiP();
+  });
+
+  // ── Fullscreen — blocked by VS Code webview sandbox ──────
   async function toggleFullscreen() {
     try {
-      if (!inFullscreen()) {
-        await videoWrapper.requestFullscreen();
-        updateFSBtn();
-      } else {
-        await document.exitFullscreen();
-        updateFSBtn();
-      }
+      if (!document.fullscreenElement) await wrapper.requestFullscreen();
+      else await document.exitFullscreen();
     } catch (e) {
-      vscode.postMessage({
-        type: "error",
-        message: `Fullscreen error: ${e?.message || e}`,
-      });
+      // Silently suppressed
     }
   }
-  document.addEventListener("fullscreenchange", updateFSBtn);
-  function updateFSBtn() {
-    const fsBtn = controls.querySelector('[data-key="fs"]');
-    if (fsBtn)
-      fsBtn.innerHTML = inFullscreen()
-        ? exitFullscreenIconSVG()
-        : fullscreenIconSVG(false);
+
+  document.addEventListener("fullscreenchange", () => {
+    fsBtn.innerHTML = document.fullscreenElement
+      ? svgExitFS()
+      : svgFullscreen();
+  });
+
+  fsBtn.innerHTML = svgFullscreen();
+  fsBtn.addEventListener("click", (e) => {
+    e.stopPropagation();
+    toggleFullscreen();
+  });
+
+  // ── Action bar ───────────────────────────────────────────
+  openExternalBtn.addEventListener("click", () =>
+    vscode.postMessage({ type: "command", command: "openExternal" }),
+  );
+  copyPathBtn.addEventListener("click", () =>
+    vscode.postMessage({ type: "command", command: "copyPath" }),
+  );
+
+  // ── Context menu ─────────────────────────────────────────
+  wrapper.addEventListener("contextmenu", (e) => {
+    e.preventDefault();
+    buildCtxMenu();
+    const x = Math.min(e.clientX, window.innerWidth - 185);
+    const y = Math.min(e.clientY, window.innerHeight - 175);
+    ctxMenu.style.left = `${x}px`;
+    ctxMenu.style.top = `${y}px`;
+    ctxMenu.classList.add("open");
+  });
+  document.addEventListener("click", () => ctxMenu.classList.remove("open"));
+
+  function buildCtxMenu() {
+    ctxMenu.innerHTML = "";
+    const active = getActiveAudio();
+    addCtx(
+      active.muted ? svgVolume() : svgMuted(),
+      active.muted ? "Unmute" : "Mute",
+      toggleMute,
+    );
+    if (document.pictureInPictureEnabled)
+      addCtx(svgPiP(), "Picture-in-Picture", togglePiP);
+    ctxMenu.appendChild(
+      Object.assign(document.createElement("div"), { className: "sep" }),
+    );
+    addCtx(svgCopy(), "Copy File Path", () =>
+      vscode.postMessage({ type: "command", command: "copyPath" }),
+    );
   }
 
-  // --- Copy Path (ask extension; reliable vs webview URI) ---
-  function copyPath() {
-    vscode.postMessage({ type: "command", command: "copyPath" });
+  function addCtx(icon, label, fn) {
+    const d = document.createElement("div");
+    d.className = "item";
+    d.innerHTML = `${icon}<span>${label}</span>`;
+    d.onclick = (e) => {
+      e.stopPropagation();
+      ctxMenu.classList.remove("open");
+      fn?.();
+    };
+    ctxMenu.appendChild(d);
   }
 
-  // --- Keyboard shortcuts ---
+  // ── Keyboard ─────────────────────────────────────────────
   window.addEventListener("keydown", (e) => {
-    const tag = (e.target && e.target.tagName) || "";
-    if (tag === "INPUT" || tag === "TEXTAREA") return;
-
+    if (["INPUT", "TEXTAREA"].includes(e.target?.tagName)) return;
     switch (e.key) {
       case " ":
+      case "k":
+      case "K":
         e.preventDefault();
-        togglePlayPause();
+        togglePlay();
         break;
       case "ArrowLeft":
-        video.currentTime = Math.max(0, video.currentTime - 5);
+      case "j":
+      case "J":
+        const tb = Math.max(0, video.currentTime - 10);
+        video.currentTime = tb;
+        if (audioEl) audioEl.currentTime = tb;
         break;
       case "ArrowRight":
-        video.currentTime = Math.min(
-          video.duration || Infinity,
-          video.currentTime + 5
-        );
+      case "l":
+      case "L":
+        const tf = Math.min(video.duration || Infinity, video.currentTime + 10);
+        video.currentTime = tf;
+        if (audioEl) audioEl.currentTime = tf;
         break;
       case "m":
       case "M":
@@ -198,210 +368,112 @@
       case "P":
         togglePiP();
         break;
-      case "j":
-      case "J":
-        video.currentTime = Math.max(0, video.currentTime - 10);
-        break;
-      case "l":
-      case "L":
-        video.currentTime = Math.min(
-          video.duration || Infinity,
-          video.currentTime + 10
+    }
+  });
+
+  // ── Message handler ───────────────────────────────────────
+  window.addEventListener("message", (event) => {
+    const msg = event.data;
+
+    if (msg.type === "video_src") {
+      // Guard — only load once, ignore duplicate messages
+      if (videoLoaded) return;
+      videoLoaded = true;
+
+      fetch(msg.src)
+        .then((r) => r.blob())
+        .then((blob) => {
+          video.src = URL.createObjectURL(blob);
+          video.muted = true;
+          video.load();
+          video.addEventListener(
+            "loadeddata",
+            () => {
+              video.classList.remove("loading");
+              document.getElementById("videoSpinner")?.remove();
+            },
+            { once: true },
+          );
+        })
+        .catch(() =>
+          vscode.postMessage({
+            type: "error",
+            message: "Failed to load video.",
+          }),
         );
-        break;
-    }
-  });
-
-  // --- Context Menu ---
-  videoWrapper.addEventListener("contextmenu", (e) => {
-    e.preventDefault();
-    openContextMenu(e.clientX, e.clientY);
-  });
-  document.addEventListener("click", () => hideContextMenu());
-
-  function openContextMenu(x, y) {
-    ctxMenu.innerHTML = "";
-
-    ctxMenu.appendChild(
-      ctxItem(
-        inFullscreen() ? exitFullscreenIconSVG() : fullscreenIconSVG(true),
-        inFullscreen() ? "Exit Fullscreen" : "Fullscreen",
-        () => toggleFullscreen()
-      )
-    );
-
-    ctxMenu.appendChild(
-      ctxItem(
-        isMuted ? mutedIconSVG() : volumeIconSVG(true),
-        isMuted ? "Unmute" : "Mute",
-        () => toggleMute()
-      )
-    );
-
-    if (document.pictureInPictureEnabled) {
-      ctxMenu.appendChild(
-        ctxItem(pipIconSVG(), "Picture-in-Picture", () => togglePiP())
-      );
     }
 
-    ctxMenu.appendChild(divider());
-    ctxMenu.appendChild(
-      ctxItem(copyIconSVG(), "Copy File Path", () => copyPath())
-    );
+    if (msg.type === "audio_ready") {
+      const currentPos = video.currentTime;
+      const wasPlaying = !video.paused;
 
-    ctxMenu.style.left = `${x}px`;
-    ctxMenu.style.top = `${y}px`;
-    ctxMenu.style.display = "flex";
-  }
-  function hideContextMenu() {
-    ctxMenu.style.display = "none";
-  }
+      audioEl = document.createElement("audio");
+      audioEl.src = msg.src;
+      audioEl.volume = parseFloat(volumeSlider.value) || 1.0;
+      audioEl.muted = false;
+      audioEl.preload = "auto";
+      audioEl.style.display = "none";
 
-  function ctxItem(svg, label, fn) {
-    const d = document.createElement("div");
-    d.className = "item";
-    d.innerHTML = `${svg}<span>${label}</span>`;
-    d.onclick = () => {
-      hideContextMenu();
-      fn && fn();
-    };
-    return d;
-  }
-  function divider() {
-    const s = document.createElement("div");
-    s.className = "sep";
-    return s;
-  }
+      audioEl.addEventListener("volumechange", () => {
+        if (!isDragging)
+          volumeSlider.value = audioEl.muted ? "0" : String(audioEl.volume);
+        updateMuteBtn();
+      });
 
-  // --- Footer text: only brand is a link ---
-  const footer = document.getElementById("footer");
-  if (footer) {
-    footer.innerHTML = `Made with ❤️ by <span class="brand"><a href="https://batchnepal.com?utm_source=vs_code&utm_campaign=video_player" target="_blank" rel="noopener">BatchNepal Pvt. Ltd.</a></span>`;
-  }
+      document.body.appendChild(audioEl);
+      video.muted = true;
+      audioEl.currentTime = currentPos;
+      if (wasPlaying) audioEl.play().catch(() => {});
 
-  // --- Helpers to build buttons ---
-  function makeCtrlBtn(key, svg, onClick) {
-    const b = document.createElement("button");
-    b.className = "ctrl";
-    b.dataset.key = key;
-    b.innerHTML = svg;
-    b.addEventListener("click", (e) => {
-      e.stopPropagation();
-      onClick && onClick();
-    });
-    return b;
-  }
+      const bar = document.getElementById("transcodeBar");
+      if (bar) {
+        bar.classList.add("done");
+        setTimeout(() => bar.remove(), 400);
+      }
 
-  // Grab references to buttons
-  const openExternalBtn = document.getElementById("openExternal");
-  const copyPathBtn = document.getElementById("copyPath");
-  const fullscreenBtn = document.getElementById("fullscreen");
+      updateMuteBtn();
+    }
 
-  // --- 1. Open in External Player ---
-  openExternalBtn.addEventListener("click", () => {
-    vscode.postMessage({
-      type: "command",
-      command: "openExternal", // Your VS Code extension should handle this
-    });
-  });
-
-  // --- 2. Copy File Path ---
-  copyPathBtn.addEventListener("click", async () => {
-    try {
-      vscode.postMessage({ type: "command", command: "copyPath" });
-    } catch (_) {
-      // fallback: copy using clipboard API if available
-      if (navigator.clipboard) {
-        try {
-          await navigator.clipboard.writeText(video.currentSrc || "");
-          alert("Video path copied to clipboard!");
-        } catch (e) {
-          console.warn("Failed to copy path:", e);
-        }
+    if (msg.type === "audio_failed") {
+      const bar = document.getElementById("transcodeBar");
+      if (bar) {
+        bar.innerHTML =
+          "⚠ Audio extraction failed. Try opening in external player.";
+        bar.classList.add("warn");
+        setTimeout(() => bar.remove(), 5000);
       }
     }
   });
 
-  fullscreenBtn.addEventListener("click", async () => {
-    try {
-      if (!document.fullscreenElement) {
-        if (video.requestFullscreen) {
-          await video.requestFullscreen();
-        } else if (video.webkitRequestFullscreen) {
-          // Safari
-          await video.webkitRequestFullscreen();
-        } else if (video.mozRequestFullScreen) {
-          // Firefox
-          await video.mozRequestFullScreen();
-        } else if (video.msRequestFullscreen) {
-          // IE/Edge
-          await video.msRequestFullscreen();
-        }
-      } else {
-        await document.exitFullscreen();
-      }
-    } catch (e) {
-      console.warn("Fullscreen failed:", e);
-    }
-  });
-
-  // --- SVG Icons (Apple-ish) ---
-  function playOverlaySVG() {
-    return `
-      <svg width="96" height="96" viewBox="0 0 64 64" xmlns="http://www.w3.org/2000/svg">
-        <circle cx="32" cy="32" r="30" fill="rgba(10,132,255,0.28)"/>
-        <polygon points="26,20 46,32 26,44" fill="#0a84ff"/>
-      </svg>`;
+  // ── SVG Icons ─────────────────────────────────────────────
+  function svgFlashPlay() {
+    return `<svg width="68" height="68" viewBox="0 0 64 64"><circle cx="32" cy="32" r="30" fill="rgba(0,0,0,0.5)"/><polygon points="26,20 48,32 26,44" fill="#fff"/></svg>`;
   }
-  function pauseOverlaySVG() {
-    return `
-      <svg width="96" height="96" viewBox="0 0 64 64" xmlns="http://www.w3.org/2000/svg">
-        <circle cx="32" cy="32" r="30" fill="rgba(10,132,255,0.28)"/>
-        <rect x="22" y="20" width="6" height="24" fill="#0a84ff"/>
-        <rect x="36" y="20" width="6" height="24" fill="#0a84ff"/>
-      </svg>`;
+  function svgFlashPause() {
+    return `<svg width="68" height="68" viewBox="0 0 64 64"><circle cx="32" cy="32" r="30" fill="rgba(0,0,0,0.5)"/><rect x="20" y="18" width="7" height="28" fill="#fff" rx="1.5"/><rect x="37" y="18" width="7" height="28" fill="#fff" rx="1.5"/></svg>`;
   }
-  function playIconSVG() {
-    return `<svg viewBox="0 0 24 24" fill="none" stroke="#fff" xmlns="http://www.w3.org/2000/svg">
-      <path d="M8 5v14l11-7z" fill="#fff"/></svg>`;
+  function svgPlayBtn() {
+    return `<svg viewBox="0 0 24 24"><polygon points="5,3 19,12 5,21" fill="currentColor"/></svg>`;
   }
-  function pauseIconSVG() {
-    return `<svg viewBox="0 0 24 24" fill="none" stroke="#fff" xmlns="http://www.w3.org/2000/svg">
-      <rect x="6" y="5" width="4" height="14" fill="#fff"/><rect x="14" y="5" width="4" height="14" fill="#fff"/></svg>`;
+  function svgPauseBtn() {
+    return `<svg viewBox="0 0 24 24"><rect x="5" y="3" width="4" height="18" fill="currentColor" rx="1"/><rect x="15" y="3" width="4" height="18" fill="currentColor" rx="1"/></svg>`;
   }
-  function volumeIconSVG(menu = false) {
-    const stroke = menu ? "#e8eaed" : "#fff";
-    return `<svg viewBox="0 0 24 24" fill="none" stroke="${stroke}" xmlns="http://www.w3.org/2000/svg">
-      <path d="M5 10v4h3l4 4V6l-4 4H5z" fill="${stroke}"/></svg>`;
+  function svgVolume() {
+    return `<svg viewBox="0 0 24 24" fill="none"><path d="M11 5L6 9H2v6h4l5 4V5z" fill="currentColor"/><path d="M15.54 8.46a5 5 0 0 1 0 7.07M19.07 4.93a10 10 0 0 1 0 14.14" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>`;
   }
-  function mutedIconSVG() {
-    return `<svg viewBox="0 0 24 24" fill="none" stroke="#fff" xmlns="http://www.w3.org/2000/svg">
-      <path d="M5 10v4h3l4 4V6l-4 4H5z" fill="#fff"/>
-      <path d="M16 9l4 4m0-4l-4 4" stroke="#ff8a8a" stroke-width="2" stroke-linecap="round"/></svg>`;
+  function svgMuted() {
+    return `<svg viewBox="0 0 24 24" fill="none"><path d="M11 5L6 9H2v6h4l5 4V5z" fill="currentColor"/><line x1="23" y1="9" x2="17" y2="15" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/><line x1="17" y1="9" x2="23" y2="15" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>`;
   }
-  function fullscreenIconSVG(menu = false) {
-    const stroke = menu ? "#e8eaed" : "#fff";
-    return `<svg viewBox="0 0 24 24" stroke="${stroke}" fill="none" xmlns="http://www.w3.org/2000/svg">
-      <path d="M7 14H5v5h5v-2H7v-3zm12 5h-5v-2h3v-3h2v5zM7 5h3V3H5v5h2V5zm12 3V3h-5v2h3v3h2z" fill="${stroke}"/></svg>`;
+  function svgFullscreen() {
+    return `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><polyline points="15 3 21 3 21 9"/><polyline points="9 21 3 21 3 15"/><line x1="21" y1="3" x2="14" y2="10"/><line x1="3" y1="21" x2="10" y2="14"/></svg>`;
   }
-  function exitFullscreenIconSVG() {
-    return `<svg viewBox="0 0 24 24" stroke="#fff" fill="none" xmlns="http://www.w3.org/2000/svg">
-      <path d="M9 15v3H6v2h5v-5H9zm10 5h-5v-5h2v3h3v2zM9 4h2v5H6V7h3V4zm7 5V6h-3V4h5v5h-2z" fill="#fff"/></svg>`;
+  function svgExitFS() {
+    return `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><polyline points="8 3 3 3 3 8"/><polyline points="21 8 21 3 16 3"/><polyline points="3 16 3 21 8 21"/><polyline points="16 21 21 21 21 16"/></svg>`;
   }
-  function pipIconSVG() {
-    return `<svg viewBox="0 0 24 24" stroke="#fff" fill="none" xmlns="http://www.w3.org/2000/svg">
-      <rect x="3" y="5" width="18" height="14" rx="2" ry="2" stroke="#fff"/>
-      <rect x="12.5" y="11.5" width="7" height="5" fill="#fff"/></svg>`;
+  function svgPiP() {
+    return `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="2" y="4" width="20" height="16" rx="2"/><rect x="12" y="11" width="8" height="6" rx="1" fill="currentColor" stroke="none"/></svg>`;
   }
-  function copyIconSVG() {
-    return `<svg viewBox="0 0 24 24" stroke="#fff" fill="none" xmlns="http://www.w3.org/2000/svg">
-      <rect x="9" y="9" width="10" height="10" rx="2" stroke="#fff"/>
-      <rect x="5" y="5" width="10" height="10" rx="2" stroke="#fff"/></svg>`;
-  }
-  function infoIconSVG() {
-    return `<svg viewBox="0 0 24 24" stroke="#fff" fill="none" xmlns="http://www.w3.org/2000/svg" width="18" height="18" aria-hidden="true">
-      <circle cx="12" cy="12" r="10" stroke="#fff"/>
-      <rect x="11" y="10" width="2" height="7" fill="#fff"/>
-      <circle cx="12" cy="7" r="1" fill="#fff"/></svg>`;
+  function svgCopy() {
+    return `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>`;
   }
 })();

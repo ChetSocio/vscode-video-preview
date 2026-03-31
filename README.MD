@@ -3,59 +3,102 @@
 [![Version](https://img.shields.io/badge/version-0.1.0-blue)](https://marketplace.visualstudio.com/)
 [![License](https://img.shields.io/badge/license-MIT-green)](LICENSE.md)
 
-#### Credit: BatchNepal Consultancy Pvt Ltd
+#### By BatchNepal Consultancy Pvt. Ltd
 
-A sleek video player for VS Code with OS fullscreen support, path copy, and external playback.  
-Offers direct video play in vscode.
-
----
-
-## Features
-
-- Play videos directly in VS Code Webview.  
-- **OS fullscreen support** – coming soon.
-- **Copy file path** to clipboard.  
-- **Open in external player** on your system.  
-- Right-click context menu with essential controls.  
+Play **MP4, WebM, MOV, MKV, and AVI** videos directly inside VS Code — with full audio, no file size limits, and a clean player UI.
 
 ### Demos
 
 ![BNPL Video Player Demo 1](https://cdn.batchnepal.com/images/SCR-20250824-qcmp.png)
 ![Video Player Demo 2](https://cdn.batchnepal.com/images/SCR-20250824-qcyq.png)
+
+---
+
+## Features
+
+- **Full audio playback** — MP4, MOV, MKV, AVI, WebM. Automatically extracts audio via ffmpeg when needed.
+- **No file size limits** — videos stream via a local server, nothing loaded into memory.
+- **All major formats** — MP4, WebM, MOV, MKV, AVI, M4V.
+- **Clean player UI** — auto-hide controls, progress bar with time tooltip, volume slider, resolution badge.
+- **Playback speed** — cycle through 0.5×, 0.75×, 1×, 1.25×, 1.5×, 2×.
+- **10-second skip** — forward and backward buttons.
+- **Picture-in-Picture** — float the video while you work.
+- **Open in external player** — one click to open in your system player.
+- **Copy file path** — instantly copy the full file path to clipboard.
+- **Right-click context menu** — quick access to all controls.
+
+---
+
+## Audio Support
+
+Most VS Code video extensions have no audio — because VS Code's webview uses Chromium, which excludes AAC patent licensing.
+
+This extension solves it using **ffmpeg** to extract audio in the background. Video plays immediately while audio loads within seconds.
+
+**ffmpeg is required for audio on MP4, MOV, MKV, and AVI files.**
+
+### Install ffmpeg
+
+**macOS:**
+
+```bash
+brew install ffmpeg
+```
+
+**Linux:**
+
+```bash
+sudo apt install ffmpeg
+```
+
+**Windows:** Download from [ffmpeg.org](https://ffmpeg.org/download.html) and add to PATH.
+
+WebM plays natively — no ffmpeg needed.
+
+---
+
+## Supported Formats
+
+| Format | Video | Audio |
+|--------|-------|-------|
+| `.mp4` | ✅ | ✅ (requires ffmpeg) |
+| `.webm` | ✅ | ✅ |
+| `.mov` | ✅ | ✅ (requires ffmpeg) |
+| `.mkv` | ✅ | ✅ (requires ffmpeg) |
+| `.avi` | ✅ | ✅ (requires ffmpeg) |
+| `.m4v` | ✅ | ✅ (requires ffmpeg) |
+
+---
+
+## Keyboard Shortcuts
+
+| Key | Action |
+|-----|--------|
+| `Space` / `K` | Play / Pause |
+| `←` / `J` | Back 10 seconds |
+| `→` / `L` | Forward 10 seconds |
+| `M` | Mute / Unmute |
+| `P` | Picture-in-Picture |
+| `F` | Fullscreen |
+
 ---
 
 ## Installation
 
-1. Download the plugin package from the [Marketplace](https://marketplace.visualstudio.com/) or from releases in github.  
-2. Install via VS Code:
+Install from the [VS Code Marketplace](https://marketplace.visualstudio.com/) or manually:
 
 ```bash
 code --install-extension vscode-video-preview-0.1.0.vsix
 ```
 
-3. Reload VS Code if needed.
-
-## Usage
-
-### Controls
-
-| Command               | Description                            |
-|-----------------------|----------------------------------------|
-| **Open External Player** | Opens video in system default player |
-| **Copy File Path**       | Copies the current video path         |
-| **Fullscreen**           | Toggles OS fullscreen for the video  |
-
-Right-click the video for quick access to all controls.
-
 ---
 
-### Keyboard Shortcuts
+## Requirements
 
-- **Space**: Play/Pause  
-- **M**: Mute/Unmute  
-- **F**: Toggle Fullscreen  
-- **Arrow Left / Arrow Right**: Seek 5s backward/forward  
-- **J / L**: Seek 10s backward/forward
+- VS Code `1.90.0` or higher
+- ffmpeg (optional — required for audio on MP4, MOV, MKV, AVI)
+
+---
 
 ## Contribution
 
@@ -67,16 +110,16 @@ Contributions are welcome!
 4. Push to the branch (`git push origin feature-name`)
 5. Submit a Pull Request
 
-Report issues or feature requests on [GitHub](https://github.com/batchnepal/vscode-video-preview).
+Report issues or feature requests on [GitHub](https://github.com/ChetSocio/vscode-video-preview/issues).
 
 ---
 
 ## License
 
-This extension is licensed under the **MIT License**. See [LICENSE.md](LICENSE.md) for details.
+MIT License. See [LICENSE.md](LICENSE.md) for details.
 
 ---
 
 ## Author
 
-BatchNepal Pvt. Ltd. – [https://batchnepal.com](https://batchnepal.com)
+[BatchNepal Consultancy Pvt. Ltd.](https://batchnepal.com)

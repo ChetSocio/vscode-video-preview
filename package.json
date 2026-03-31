@@ -1,8 +1,8 @@
 {
   "name": "vscode-video-preview",
   "displayName": "Video Preview (Player) - BNPL",
-  "description": "Play and view video files (.mp4, .webm, .mov, .mkv, .avi) inside VS Code using a custom editor.",
-  "version": "0.0.2",
+  "description": "Play MP4, WebM, MOV, MKV, and AVI videos directly inside VS Code with full audio support, no file size limits, playback speed control, and Picture-in-Picture.",
+  "version": "0.2.0",
   "publisher": "BatchNepal",
   "author": {
     "name": "BatchNepal Consultancy Pvt. Ltd.",
@@ -35,7 +35,6 @@
     "Other"
   ],
   "activationEvents": [
-    "onCommand:videoPreview.open",
     "onFileSystem:**/*.mp4",
     "onFileSystem:**/*.webm",
     "onFileSystem:**/*.mov",
@@ -52,33 +51,21 @@
       }
     ],
     "customEditors": [
-      {
-        "viewType": "videoPreview.viewer",
-        "displayName": "Video Preview",
-        "selector": [
-          {
-            "filenamePattern": "**/*.mp4"
-          },
-          {
-            "filenamePattern": "**/*.webm"
-          },
-          {
-            "filenamePattern": "**/*.mov"
-          },
-          {
-            "filenamePattern": "**/*.mkv"
-          },
-          {
-            "filenamePattern": "**/*.avi"
-          },
-          {
-            "filenamePattern": "**/*.m4v"
-          }
-        ],
-        "priority": "default",
-        "readonly": true
-      }
+  {
+    "viewType": "videoPreview.viewer",
+    "displayName": "Video Preview",
+    "priority": "default",
+    "readonly": true,
+    "selector": [
+      { "filenamePattern": "**/*.mp4" },
+      { "filenamePattern": "**/*.webm" },
+      { "filenamePattern": "**/*.mov" },
+      { "filenamePattern": "**/*.mkv" },
+      { "filenamePattern": "**/*.avi" },
+      { "filenamePattern": "**/*.m4v" }
     ]
+  }
+]
   },
   "scripts": {
     "compile": "tsc -p ./",
@@ -87,7 +74,7 @@
     "package": "vsce package"
   },
   "devDependencies": {
-    "@types/node": "^18.19.0",
+    "@types/node": "^18.19.130",
     "@types/vscode": "^1.90.0",
     "typescript": "^5.4.0"
   }
