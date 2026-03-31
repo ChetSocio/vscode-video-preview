@@ -9,8 +9,8 @@ Play **MP4, WebM, MOV, MKV, and AVI** videos directly inside VS Code — with fu
 
 ### Demos
 
-![BNPL Video Player Demo 1](https://cdn.batchnepal.com/images/SCR-20250824-qcmp.png)
-![Video Player Demo 2](https://cdn.batchnepal.com/images/SCR-20250824-qcyq.png)
+![BNPL Video Player Demo 1](https://sgp1.digitaloceanspaces.com/batchassets/shottr/SCR-20260401-630p.png)
+![Video Player Demo 2](https://sgp1.digitaloceanspaces.com/batchassets/shottr/SCR-20260401-643p.png)
 
 ---
 
