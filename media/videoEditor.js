@@ -31,6 +31,8 @@
 
   let audioEl = null;
   let videoLoaded = false; // guard — outside handler so it persists across messages
+  let requestedCodecFallback = false;
+  let currentObjectUrl = null;
 
   video.volume = 1.0;
   video.muted = true;
@@ -72,6 +74,12 @@
   });
 
   video.addEventListener("error", () => {
+    if (!requestedCodecFallback) {
+      requestedCodecFallback = true;
+      vscode.postMessage({ type: "native_playback_failed" });
+      return;
+    }
+
     vscode.postMessage({
       type: "error",
       message: "Failed to load video or unsupported codec.",
@@ -376,14 +384,17 @@
     const msg = event.data;
 
     if (msg.type === "video_src") {
-      // Guard — only load once, ignore duplicate messages
-      if (videoLoaded) return;
+      if (videoLoaded && !msg.replace) return;
       videoLoaded = true;
 
       fetch(msg.src)
         .then((r) => r.blob())
         .then((blob) => {
-          video.src = URL.createObjectURL(blob);
+          if (currentObjectUrl) {
+            URL.revokeObjectURL(currentObjectUrl);
+          }
+          currentObjectUrl = URL.createObjectURL(blob);
+          video.src = currentObjectUrl;
           video.muted = true;
           video.load();
           video.addEventListener(
@@ -401,6 +412,14 @@
             message: "Failed to load video.",
           }),
         );
+    }
+
+    if (msg.type === "transcode_pending") {
+      const bar = document.getElementById("transcodeBar");
+      if (bar) {
+        bar.classList.remove("warn", "done");
+        bar.innerHTML = `<div class="transcode-spinner"></div><span>${msg.message}</span>`;
+      }
     }
 
     if (msg.type === "audio_ready") {
@@ -439,6 +458,15 @@
       if (bar) {
         bar.innerHTML =
           "⚠ Audio extraction failed. Try opening in external player.";
+        bar.classList.add("warn");
+        setTimeout(() => bar.remove(), 5000);
+      }
+    }
+
+    if (msg.type === "transcode_failed") {
+      const bar = document.getElementById("transcodeBar");
+      if (bar) {
+        bar.textContent = "⚠ Codec fallback failed. Try opening in an external player.";
         bar.classList.add("warn");
         setTimeout(() => bar.remove(), 5000);
       }
