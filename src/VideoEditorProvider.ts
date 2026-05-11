@@ -16,8 +16,9 @@ const FFMPEG_PATHS = [
   'C:\\Program Files\\ffmpeg\\bin\\ffmpeg.exe',
 ];
 
-const NEEDS_TRANSCODE = new Set(['.webm', '.mkv', '.avi', '.ogv']);
+const NEEDS_TRANSCODE = new Set(['.mkv', '.avi', '.ogv']);
 const NEEDS_AUDIO_EXTRACT = new Set(['.mp4', '.mov', '.m4v']);
+const SUPPORTS_FALLBACK_TRANSCODE = new Set(['.webm']);
 
 export class VideoEditorProvider implements vscode.CustomReadonlyEditorProvider {
   public static readonly viewType = 'videoPreview.viewer';
@@ -58,14 +59,17 @@ export class VideoEditorProvider implements vscode.CustomReadonlyEditorProvider 
 
     const needsTranscode = NEEDS_TRANSCODE.has(ext);
     const needsAudio = NEEDS_AUDIO_EXTRACT.has(ext);
-    const ffmpegBin = (needsTranscode || needsAudio) ? await this.findFfmpeg() : null;
+    const supportsFallbackTranscode = SUPPORTS_FALLBACK_TRANSCODE.has(ext);
+    const ffmpegBin = (needsTranscode || needsAudio || supportsFallbackTranscode) ? await this.findFfmpeg() : null;
     const willTranscode = needsTranscode && ffmpegBin !== null;
     const willExtractAudio = needsAudio && ffmpegBin !== null;
+    const canFallbackTranscode = supportsFallbackTranscode && ffmpegBin !== null;
+    let transcodeRequested = false;
 
     webview.html = this.getHtml({
       webview, scriptUri, styleUri, filename, nonce, port,
       willExtractAudio: willExtractAudio || willTranscode,
-      showNoFfmpegWarn: (needsTranscode || needsAudio) && !ffmpegBin
+      showNoFfmpegWarn: (needsTranscode || needsAudio || supportsFallbackTranscode) && !ffmpegBin
     });
 
     let audioToken: string | null = null;
@@ -78,6 +82,31 @@ export class VideoEditorProvider implements vscode.CustomReadonlyEditorProvider 
             if (!willTranscode) {
               webview.postMessage({ type: 'video_src', src: videoUrl });
             }
+            break;
+          case 'native_playback_failed':
+            if (canFallbackTranscode && ffmpegBin && !transcodeRequested) {
+              transcodeRequested = true;
+              webview.postMessage({ type: 'transcode_pending', message: 'Codec unsupported in VS Code. Transcoding with ffmpeg...' });
+
+              this.transcodeToMp4(ffmpegBin, document.uri.fsPath)
+                .then((mp4Path) => {
+                  const mp4Token = this.server.register(mp4Path);
+                  webview.postMessage({ type: 'video_src', src: this.server.url(mp4Token), replace: true });
+                  return this.extractAudio(ffmpegBin, document.uri.fsPath);
+                })
+                .then((audioPath) => {
+                  audioToken = this.server.register(audioPath);
+                  webview.postMessage({ type: 'audio_ready', src: this.server.url(audioToken) });
+                })
+                .catch((error: unknown) => {
+                  const message = error instanceof Error ? error.message : String(error);
+                  webview.postMessage({ type: 'transcode_failed', message });
+                  vscode.window.showErrorMessage(`Video Preview: Failed to transcode unsupported codec. ${message}`);
+                });
+              break;
+            }
+
+            vscode.window.showErrorMessage('Video Preview: Failed to load video or unsupported codec. Install ffmpeg for codec fallback support.');
             break;
           case 'error':
             vscode.window.showErrorMessage(`Video Preview: ${msg.message}`);
@@ -103,6 +132,7 @@ export class VideoEditorProvider implements vscode.CustomReadonlyEditorProvider 
     });
 
     if (willTranscode && ffmpegBin) {
+      transcodeRequested = true;
       this.transcodeToMp4(ffmpegBin, document.uri.fsPath)
         .then((mp4Path) => {
           const mp4Token = this.server.register(mp4Path);
@@ -219,7 +249,7 @@ export class VideoEditorProvider implements vscode.CustomReadonlyEditorProvider 
     const topBar = willExtractAudio
       ? `<div class="transcode-bar" id="transcodeBar"><div class="transcode-spinner"></div><span>Extracting audio for playback...</span></div>`
       : showNoFfmpegWarn
-        ? `<div class="transcode-bar warn" id="transcodeBar"><span>⚠ Install ffmpeg for audio support: <code>brew install ffmpeg</code></span></div>`
+        ? `<div class="transcode-bar warn" id="transcodeBar"><span>⚠ Install ffmpeg for codec fallback and audio support.</span></div>`
         : '';
 
     return /* html */`
