@@ -1,10 +1,11 @@
 import * as crypto from 'crypto';
-import { execFile } from 'child_process';
+import { execFile, spawn } from 'child_process';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import * as vscode from 'vscode';
 import { LocalFileServer } from './LocalFileServer';
+import { probeMedia } from './MediaProbe';
 
 const FFMPEG_PATHS = [
   '/opt/homebrew/bin/ffmpeg',
@@ -16,9 +17,18 @@ const FFMPEG_PATHS = [
   'C:\\Program Files\\ffmpeg\\bin\\ffmpeg.exe',
 ];
 
-const NEEDS_TRANSCODE = new Set(['.mkv', '.avi', '.ogv']);
-const NEEDS_AUDIO_EXTRACT = new Set(['.mp4', '.mov', '.m4v']);
-const SUPPORTS_FALLBACK_TRANSCODE = new Set(['.mp4', '.mov', '.m4v', '.webm']);
+const TRANSCODE_CONTAINERS = new Set(['.mkv', '.avi', '.ogv']);
+const AUDIO_EXTRACT_CONTAINERS = new Set(['.mp4', '.mov', '.m4v']);
+const TRANSCODE_VIDEO_CODECS = new Set([
+  'prores',
+  'mpeg4',
+  'hevc',
+  'h265',
+  'vc1',
+  'wmv3',
+  'theora',
+]);
+const EXTRACT_AUDIO_CODECS = new Set(['aac', 'ac3', 'eac3', 'alac']);
 
 export class VideoEditorProvider implements vscode.CustomReadonlyEditorProvider {
   public static readonly viewType = 'videoPreview.viewer';
@@ -36,10 +46,12 @@ export class VideoEditorProvider implements vscode.CustomReadonlyEditorProvider 
   async resolveCustomEditor(
     document: vscode.CustomDocument,
     webviewPanel: vscode.WebviewPanel,
-    _token: vscode.CancellationToken
+    token: vscode.CancellationToken
   ): Promise<void> {
     const webview = webviewPanel.webview;
     const port = this.server.getPort();
+    const session = new vscode.CancellationTokenSource();
+    const cancelFromResolve = token.onCancellationRequested(() => session.cancel());
 
     webview.options = {
       enableScripts: true,
@@ -58,15 +70,18 @@ export class VideoEditorProvider implements vscode.CustomReadonlyEditorProvider 
     const ext = path.extname(document.uri.fsPath).toLowerCase();
     const videoToken = this.server.register(document.uri.fsPath);
     const videoUrl = this.server.url(videoToken);
-
-    const needsTranscode = NEEDS_TRANSCODE.has(ext);
-    const needsAudio = NEEDS_AUDIO_EXTRACT.has(ext);
-    const supportsFallback = SUPPORTS_FALLBACK_TRANSCODE.has(ext);
-    const ffmpegBin =
-      needsTranscode || needsAudio || supportsFallback ? await this.findFfmpeg() : null;
+    const ffmpegBin = await this.findFfmpeg();
+    const mediaInfo = ffmpegBin ? await probeMedia(ffmpegBin, document.uri.fsPath) : null;
+    const sourceHasAudio = mediaInfo ? mediaInfo.audioCodec !== null : true;
+    const codecNeedsTranscode = mediaInfo?.videoCodec
+      ? TRANSCODE_VIDEO_CODECS.has(mediaInfo.videoCodec)
+      : false;
+    const needsTranscode = TRANSCODE_CONTAINERS.has(ext) || codecNeedsTranscode;
     const willTranscode = needsTranscode && ffmpegBin !== null;
-    const willExtractAudio = needsAudio && ffmpegBin !== null;
-    const canFallback = supportsFallback && ffmpegBin !== null;
+    const needsNativeAudioExtract = sourceHasAudio && (mediaInfo?.audioCodec
+      ? EXTRACT_AUDIO_CODECS.has(mediaInfo.audioCodec)
+      : AUDIO_EXTRACT_CONTAINERS.has(ext));
+    const canFallback = ffmpegBin !== null;
     const lastPosition = this.context.workspaceState.get<number>(
       `videoPreview:lastPosition:${document.uri.fsPath}`,
       0
@@ -86,37 +101,55 @@ export class VideoEditorProvider implements vscode.CustomReadonlyEditorProvider 
     let transcodeRequested = willTranscode;
 
     const extractAudio = async (): Promise<void> => {
-      if (!ffmpegBin) {
+      if (!ffmpegBin || !sourceHasAudio || session.token.isCancellationRequested) {
         return;
       }
 
       webview.postMessage({ type: 'status', message: 'Preparing audio…' });
 
       try {
-        const audioPath = await this.extractAudio(ffmpegBin, document.uri.fsPath);
+        const audioPath = await this.extractAudio(
+          ffmpegBin,
+          document.uri.fsPath,
+          session.token
+        );
+        if (session.token.isCancellationRequested) {
+          return;
+        }
         audioToken = this.server.register(audioPath);
         webview.postMessage({ type: 'audio_ready', src: this.server.url(audioToken) });
       } catch (error) {
-        webview.postMessage({
-          type: 'audio_failed',
-          message: this.errorMessage(error),
-        });
+        if (!session.token.isCancellationRequested) {
+          webview.postMessage({
+            type: 'audio_failed',
+            message: this.errorMessage(error),
+          });
+        }
       }
     };
 
     const transcodeAndLoad = async (): Promise<void> => {
-      if (!ffmpegBin) {
-        webview.postMessage({
-          type: 'fatal',
-          message: 'This codec is not supported by VS Code. Install ffmpeg to enable fallback playback.',
-        });
+      if (!ffmpegBin || session.token.isCancellationRequested) {
+        if (!ffmpegBin) {
+          webview.postMessage({
+            type: 'fatal',
+            message: 'This codec is not supported by VS Code. Install ffmpeg to enable fallback playback.',
+          });
+        }
         return;
       }
 
       webview.postMessage({ type: 'status', message: 'Preparing compatible video…' });
 
       try {
-        const mp4Path = await this.transcodeToMp4(ffmpegBin, document.uri.fsPath);
+        const mp4Path = await this.transcodeToMp4(
+          ffmpegBin,
+          document.uri.fsPath,
+          session.token
+        );
+        if (session.token.isCancellationRequested) {
+          return;
+        }
         convertedVideoToken = this.server.register(mp4Path);
         webview.postMessage({
           type: 'video_src',
@@ -126,10 +159,12 @@ export class VideoEditorProvider implements vscode.CustomReadonlyEditorProvider 
         });
         await extractAudio();
       } catch (error) {
-        webview.postMessage({
-          type: 'fatal',
-          message: `Could not prepare this video. ${this.errorMessage(error)}`,
-        });
+        if (!session.token.isCancellationRequested) {
+          webview.postMessage({
+            type: 'fatal',
+            message: `Could not prepare this video. ${this.errorMessage(error)}`,
+          });
+        }
       }
     };
 
@@ -148,9 +183,9 @@ export class VideoEditorProvider implements vscode.CustomReadonlyEditorProvider 
               position: lastPosition,
             });
 
-            if (willExtractAudio) {
+            if (needsNativeAudioExtract && ffmpegBin) {
               void extractAudio();
-            } else if (needsAudio && !ffmpegBin) {
+            } else if (needsNativeAudioExtract && !ffmpegBin) {
               webview.postMessage({
                 type: 'audio_unavailable',
                 message: 'Video is playing without audio. Install ffmpeg to enable audio playback.',
@@ -188,14 +223,19 @@ export class VideoEditorProvider implements vscode.CustomReadonlyEditorProvider 
             break;
         }
       } catch (error) {
-        webview.postMessage({
-          type: 'fatal',
-          message: this.errorMessage(error),
-        });
+        if (!session.token.isCancellationRequested) {
+          webview.postMessage({
+            type: 'fatal',
+            message: this.errorMessage(error),
+          });
+        }
       }
     });
 
     webviewPanel.onDidDispose(() => {
+      session.cancel();
+      cancelFromResolve.dispose();
+      session.dispose();
       disposable.dispose();
       this.server.unregister(videoToken);
       if (audioToken) {
@@ -225,89 +265,153 @@ export class VideoEditorProvider implements vscode.CustomReadonlyEditorProvider 
 
   private testBin(bin: string): Promise<boolean> {
     return new Promise((resolve) => {
-      execFile(bin, ['-version'], { timeout: 5000 }, (error) => resolve(!error));
+      execFile(
+        bin,
+        ['-version'],
+        { timeout: 5000, windowsHide: true },
+        (error) => resolve(!error)
+      );
     });
   }
 
-  private transcodeToMp4(ffmpegBin: string, inputPath: string): Promise<string> {
+  private async transcodeToMp4(
+    ffmpegBin: string,
+    inputPath: string,
+    token: vscode.CancellationToken
+  ): Promise<string> {
     const outPath = path.join(
       this.tempDir(),
       `vscode-preview-video-${this.cacheKey(inputPath)}.mp4`
     );
 
     if (fs.existsSync(outPath)) {
-      return Promise.resolve(outPath);
+      return outPath;
     }
 
-    return new Promise((resolve, reject) => {
-      execFile(
-        ffmpegBin,
-        [
-          '-nostdin',
-          '-hide_banner',
-          '-loglevel',
-          'error',
-          '-i',
-          inputPath,
-          '-c:v',
-          'libx264',
-          '-preset',
-          'veryfast',
-          '-an',
-          '-movflags',
-          '+faststart',
-          '-y',
-          outPath,
-        ],
-        { timeout: 300000 },
-        (error, _stdout, stderr) => {
-          if (error) {
-            reject(new Error(stderr || error.message));
-          } else {
-            resolve(outPath);
-          }
-        }
-      );
-    });
+    const partialPath = outPath.replace(/\.mp4$/, '.partial.mp4');
+    this.removeIfExists(partialPath);
+
+    await this.runFfmpeg(
+      ffmpegBin,
+      [
+        '-nostdin',
+        '-hide_banner',
+        '-loglevel',
+        'error',
+        '-i',
+        inputPath,
+        '-c:v',
+        'libx264',
+        '-preset',
+        'veryfast',
+        '-an',
+        '-movflags',
+        '+faststart',
+        '-y',
+        partialPath,
+      ],
+      partialPath,
+      token
+    );
+
+    fs.renameSync(partialPath, outPath);
+    return outPath;
   }
 
-  private extractAudio(ffmpegBin: string, inputPath: string): Promise<string> {
+  private async extractAudio(
+    ffmpegBin: string,
+    inputPath: string,
+    token: vscode.CancellationToken
+  ): Promise<string> {
     const outPath = path.join(
       this.tempDir(),
       `vscode-preview-audio-${this.cacheKey(inputPath)}.mp3`
     );
 
     if (fs.existsSync(outPath)) {
-      return Promise.resolve(outPath);
+      return outPath;
     }
 
+    const partialPath = outPath.replace(/\.mp3$/, '.partial.mp3');
+    this.removeIfExists(partialPath);
+
+    await this.runFfmpeg(
+      ffmpegBin,
+      [
+        '-nostdin',
+        '-hide_banner',
+        '-loglevel',
+        'error',
+        '-i',
+        inputPath,
+        '-vn',
+        '-c:a',
+        'libmp3lame',
+        '-b:a',
+        '128k',
+        '-y',
+        partialPath,
+      ],
+      partialPath,
+      token
+    );
+
+    fs.renameSync(partialPath, outPath);
+    return outPath;
+  }
+
+  private runFfmpeg(
+    ffmpegBin: string,
+    args: string[],
+    partialPath: string,
+    token: vscode.CancellationToken
+  ): Promise<void> {
     return new Promise((resolve, reject) => {
-      execFile(
-        ffmpegBin,
-        [
-          '-nostdin',
-          '-hide_banner',
-          '-loglevel',
-          'error',
-          '-i',
-          inputPath,
-          '-vn',
-          '-c:a',
-          'libmp3lame',
-          '-b:a',
-          '128k',
-          '-y',
-          outPath,
-        ],
-        { timeout: 120000 },
-        (error, _stdout, stderr) => {
-          if (error) {
-            reject(new Error(stderr || error.message));
-          } else {
-            resolve(outPath);
-          }
+      if (token.isCancellationRequested) {
+        reject(new Error('Cancelled'));
+        return;
+      }
+
+      const child = spawn(ffmpegBin, args, {
+        stdio: ['ignore', 'ignore', 'pipe'],
+        windowsHide: true,
+      });
+      let stderr = '';
+      let settled = false;
+
+      const finish = (error?: Error) => {
+        if (settled) {
+          return;
         }
-      );
+        settled = true;
+        cancellation.dispose();
+        if (error) {
+          this.removeIfExists(partialPath);
+          reject(error);
+        } else {
+          resolve();
+        }
+      };
+
+      const cancellation = token.onCancellationRequested(() => {
+        child.kill();
+      });
+
+      child.stderr.on('data', (chunk: Buffer) => {
+        stderr = `${stderr}${chunk.toString()}`.slice(-64 * 1024);
+      });
+
+      child.once('error', (error) => finish(error));
+      child.once('close', (code, signal) => {
+        if (token.isCancellationRequested) {
+          finish(new Error('Cancelled'));
+        } else if (code === 0) {
+          finish();
+        } else {
+          const detail = stderr.trim() || `ffmpeg exited with ${signal ?? code}`;
+          finish(new Error(detail));
+        }
+      });
     });
   }
 
@@ -315,13 +419,23 @@ export class VideoEditorProvider implements vscode.CustomReadonlyEditorProvider 
     const stat = fs.statSync(inputPath);
     return crypto
       .createHash('sha256')
-      .update(`${inputPath}:${stat.size}:${stat.mtimeMs}:v2`)
+      .update(`${inputPath}:${stat.size}:${stat.mtimeMs}:v3`)
       .digest('hex')
       .slice(0, 16);
   }
 
   private tempDir(): string {
     return process.platform === 'darwin' ? '/private/tmp' : os.tmpdir();
+  }
+
+  private removeIfExists(filePath: string): void {
+    try {
+      fs.unlinkSync(filePath);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
+        throw error;
+      }
+    }
   }
 
   private errorMessage(error: unknown): string {
