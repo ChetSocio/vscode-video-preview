@@ -51,25 +51,26 @@
       }
     ],
     "customEditors": [
-  {
-    "viewType": "videoPreview.viewer",
-    "displayName": "Video Preview",
-    "priority": "default",
-    "readonly": true,
-    "selector": [
-      { "filenamePattern": "**/*.mp4" },
-      { "filenamePattern": "**/*.webm" },
-      { "filenamePattern": "**/*.mov" },
-      { "filenamePattern": "**/*.mkv" },
-      { "filenamePattern": "**/*.avi" },
-      { "filenamePattern": "**/*.m4v" }
+      {
+        "viewType": "videoPreview.viewer",
+        "displayName": "Video Preview",
+        "priority": "default",
+        "readonly": true,
+        "selector": [
+          { "filenamePattern": "**/*.mp4" },
+          { "filenamePattern": "**/*.webm" },
+          { "filenamePattern": "**/*.mov" },
+          { "filenamePattern": "**/*.mkv" },
+          { "filenamePattern": "**/*.avi" },
+          { "filenamePattern": "**/*.m4v" }
+        ]
+      }
     ]
-  }
-]
   },
   "scripts": {
     "compile": "tsc -p ./",
     "watch": "tsc -w",
+    "test": "node --test test/*.test.js",
     "lint": "echo 'add eslint if you like'",
     "package": "vsce package"
   },
